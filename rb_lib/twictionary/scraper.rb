@@ -17,10 +17,34 @@ module Twictionary
                 'Scobleizer/tech-event-organizers',
                 'angellist/angels'
             ]
-            @queue = []
+            @queue = [
+                {
+                    token_number: 1,
+                    wait_time: 0
+                },
+                {
+                    token_number: 2,
+                    wait_time: 0
+                },
+                {
+                    token_number: 3,
+                    wait_time: 0
+                },
+                {
+                    token_number: 4,
+                    wait_time: 0
+                }
+            ]
             @token_number = 0
+            @MAX_QUEUE_SIZE = CONFIGS['twitter']['consumer_keys'].length
+            @num_tries = 0
 
             generate_twitter_client
+        end
+
+        def test
+            binding.pry
+            p @twitter
         end
 
         def scrape
@@ -46,7 +70,7 @@ module Twictionary
                     p "RATE LIMIT HIT: #{error.rate_limit.reset_in}"
                     raise if num_attempts > MAX_ATTEMPTS
 
-                    if @queue.length == 3
+                    if @queue.length == @MAX_QUEUE_SIZE
                         # NOTE: Your process could go to sleep for up to 15 minutes but if you
                         # retry any sooner, it will almost certainly fail with the same exception.
                         sleep error.rate_limit.reset_in
@@ -62,21 +86,53 @@ module Twictionary
                         next_token
                         retry
                     end
-            end
+                end
                 save_users(users)
             end
         end
 
         private
 
-            def next_token
+            def next_token(error)
+                @num_tries += 1
                 p "SWITCHING TOKENS!"
-                if @queue.length == 3
-                    @token_number = @queue[0][:token_number]
-                else
-                    @token_number = (@token_number + 1) %3
+
+                @queue.push({ token_number: @token_number, wait_time: error.rate_limit.reset_in })
+
+                if @num_tries == 5
+                    @queue.sort! {|a,b| a[:wait_time] <=> b[:wait_time]}
+                    p @queue
+                    sleep(@queue[0][:wait_time] + 10)
+                    @num_tries = 0
                 end
 
+                @token_number = @queue.shift()[:token_number]
+                # if @queue.length == @MAX_QUEUE_SIZE
+                #     @token_number = @queue[0][:token_number]
+                # else
+                #     @token_number = ((0...@MAX_QUEUE_SIZE).to_a - @queue.collect {|el| el[:token_number] }).sample
+                # end
+
+                #         p "RATE LIMIT HIT: #{error.rate_limit.reset_in}"
+                #         p @queue
+
+                #         if @queue.length == @MAX_QUEUE_SIZE
+                #             # NOTE: Your process could go to sleep for up to 15 minutes but if you
+                #             # retry any sooner, it will almost certainly fail with the same exception.
+                #             sleep(error.rate_limit.reset_in + 10)
+                #             @queue.delete_if {|el| el[:token_number] == @token_number}
+                #             generate_twitter_client
+                #             retry
+                #         else
+                #             @queue.push({
+                #                 token_number: @token_number,
+                #                 wait_time: error.rate_limit.reset_at
+                #             }).sort! {|a,b| a[:wait_time] <=> b[:wait_time]}
+                #             next_token
+                #             retry
+                #         end
+
+                # p @token_number
                 generate_twitter_client
             end
 
@@ -130,25 +186,16 @@ module Twictionary
                     begin
                         num_attempts += 1
                         tweets = @twitter.user_timeline(user.screen_name, options)
+                        @num_tries = 0
                     rescue Twitter::Error::TooManyRequests => error
-                        p "RATE LIMIT HIT: #{error.rate_limit.reset_in}"
-
-                        if @queue.length == 3
-                            # NOTE: Your process could go to sleep for up to 15 minutes but if you
-                            # retry any sooner, it will almost certainly fail with the same exception.
-                            sleep(error.rate_limit.reset_in + 10)
-                            @queue.shift
-                            generate_twitter_client
-                            retry
-                        else
-                            @queue.unshift({
-                                token_number: @token_number,
-                                wait_time: error.rate_limit.reset_in
-                            }).sort! {|a,b| a[:wait_time] <=> b[:wait_time] }
-                            next_token
-                            retry
-                        end
-                    rescue Twitter::Error::ClientError
+                        # p "Start again in #{error.rate_limit.reset_in}"
+                        # sleep(error.rate_limit.reset_in + 10)
+                        next_token(error)
+                        retry
+                    rescue Twitter::Error::Unauthorized
+                        user.delete
+                        next
+                    rescue
                         raise if num_attempts > MAX_ATTEMPTS
                         retry
                     end
