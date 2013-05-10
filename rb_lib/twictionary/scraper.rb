@@ -195,6 +195,9 @@ module Twictionary
                     rescue Twitter::Error::Unauthorized
                         user.delete
                         next
+                    rescue Twitter::Error::NotFound
+                        user.delete
+                        next
                     rescue
                         raise if num_attempts > MAX_ATTEMPTS
                         retry
